@@ -6,6 +6,9 @@ from picamera2.outputs import FileOutput
 from fastapi import FastAPI, WebSocket
 from threading import Condition
 from contextlib import asynccontextmanager
+from ultralytics import YOLO
+import numpy as np
+import cv2
 
 
 class StreamingOutput(io.BufferedIOBase):
@@ -31,6 +34,7 @@ class JpegStream:
         self.connections = set()
         self.picam2 = None
         self.task = None
+        self.model = YOLO("yolo11n.pt")  # Load the YOLOv8 model: yolov8n.pt
 
     async def stream_jpeg(self):
         self.picam2 = Picamera2()
@@ -44,8 +48,21 @@ class JpegStream:
         try:
             while self.active:
                 jpeg_data = await output.read()
+
+                # Convert JPEG data to OpenCV format
+                np_arr = np.frombuffer(jpeg_data, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+
+                # # Perform object detection
+                results = self.model(img)
+                annotated_frame = results[0].plot()
+                
+                # Encode image back to JPEG
+                _, annotated_frame_jpeg = cv2.imencode('.jpg', annotated_frame)
+
+                # Send the annotated frame to all connected clients
                 tasks = [
-                    websocket.send_bytes(jpeg_data)
+                    websocket.send_bytes(annotated_frame_jpeg.tobytes())
                     for websocket in self.connections.copy()
                 ]
                 await asyncio.gather(*tasks, return_exceptions=True)
